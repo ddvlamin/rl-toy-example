@@ -1,0 +1,7 @@
+gymnasium~=1.2.0
+numpy~=2.2.0
+torch~=2.8.0
+stable-baselines3[extra]~=2.7.0
+python-binance~=1.0.29
+pandas~=2.3.0
+jupyter~=1.1.1
