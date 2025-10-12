@@ -1,6 +1,11 @@
 import gymnasium as gym
 import numpy as np
-import collections
+from enum import IntEnum
+
+class Actions(IntEnum):
+    Hold = 0
+    Buy = 1
+    Sell = 2
 
 class CryptoTraderEnv(gym.Env):
     """
@@ -8,26 +13,29 @@ class CryptoTraderEnv(gym.Env):
     """
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, initial_balance=1000, initial_crypto_holdings=0, crypto_prices=None, transaction_fee_percent=0.001):
+    def __init__(self, initial_balance=1000, initial_crypto_holdings=0, crypto_prices=None, transaction_fee_percent=0.01, window_size=10):
         super(CryptoTraderEnv, self).__init__()
 
         self.initial_balance = initial_balance
         self.initial_crypto_holdings = initial_crypto_holdings
-        self.crypto_prices = crypto_prices if crypto_prices is not None else self._generate_dummy_prices()
+        self.crypto_prices = crypto_prices
         self.transaction_fee_percent = transaction_fee_percent
+        self.window_size = window_size
 
-        # Internal state for tracking buy prices
-        self._buys = collections.deque()
+
+        # Internal state for tracking average cost basis
+        self.total_cost_basis = 0.0
 
         self.current_step = 0
 
         # Action space: 0: Hold, 1: Buy, 2: Sell
-        self.action_space = gym.spaces.Discrete(3)
+        self.action_space = gym.spaces.Discrete(len(Actions))
 
         # Observation space: [balance, crypto_holdings, current_price]
         self.observation_space = gym.spaces.Box(
-            low=np.array([0, 0, 0]),
-            high=np.array([np.inf, np.inf, np.inf]),
+            low=0,
+            high=np.inf,
+            shape=(self.window_size+2,),
             dtype=np.float32
         )
 
@@ -37,9 +45,10 @@ class CryptoTraderEnv(gym.Env):
         super().reset(seed=seed)
         self.balance = self.initial_balance
         self.crypto_holdings = self.initial_crypto_holdings
-        self.current_step = 0
-        self._buys.clear()
+        self.current_step = self.window_size
+        self.total_cost_basis = 0.0
         self.done = False
+        self.last_portfolio_value = self._get_assets_value()
         return self._get_observation(), {}
 
     def step(self, action):
@@ -48,54 +57,70 @@ class CryptoTraderEnv(gym.Env):
             return self._get_observation(), 0.0, self.done, False, {}
 
         current_price = self.crypto_prices[self.current_step]
+        current_portfolio_value = self._get_assets_value()
         reward = 0.0
 
-        if action == 1:  # Buy
-            if self.balance > 0:
+        if action == Actions.Buy:
+            if self.balance > 1:
                 # Spend 50% of balance to buy crypto
                 spend_amount = self.balance * 0.5
+                # The fee is part of the spend, not extra
                 fee = spend_amount * self.transaction_fee_percent
-                amount_to_buy = (spend_amount - fee) / current_price
+                net_spend = spend_amount - fee
+                amount_to_buy = net_spend / current_price
 
                 self.crypto_holdings += amount_to_buy
                 self.balance -= spend_amount
+                self.total_cost_basis += net_spend
 
-                # Record the buy for reward calculation on sell
-                self._buys.append({'amount': amount_to_buy, 'price': current_price})
+                #reward = current_portfolio_value - self.last_portfolio_value
 
                 # Small penalty for transaction cost/discouraging frantic trading
-                reward = -fee
+                reward -= fee
 
-        elif action == 2:  # Sell
-            if self.crypto_holdings > 0:
+            # if balance is very low and crypto is worth nothing, end the episode
+            elif self.crypto_holdings * current_price < 1:
+                reward = self.balance - self.initial_balance
+                self.done = True
+            
+            # Not enough balance to buy
+            else:
+                reward = -1.0  # Small penalty for trying to buy without funds
+
+        elif action == Actions.Sell:
+            if self.crypto_holdings * current_price > 1:
                 # Sell 50% of holdings
                 crypto_to_sell = self.crypto_holdings * 0.5
-                
-                # Calculate the cost basis for the sold assets (FIFO - First-In, First-Out)
-                cost_basis = 0
-                amount_sold = crypto_to_sell
-                while amount_sold > 0 and self._buys:
-                    oldest_buy = self._buys[0]
-                    if oldest_buy['amount'] <= amount_sold:
-                        # This entire buy record is sold
-                        cost_basis += oldest_buy['amount'] * oldest_buy['price']
-                        amount_sold -= oldest_buy['amount']
-                        self._buys.popleft()
-                    else:
-                        # Part of this buy record is sold
-                        cost_basis += amount_sold * oldest_buy['price']
-                        self._buys[0]['amount'] -= amount_sold
-                        amount_sold = 0
 
                 proceeds = crypto_to_sell * current_price
                 fee = proceeds * self.transaction_fee_percent
+                net_proceeds = proceeds - fee
                 
-                self.balance += proceeds - fee
-                self.crypto_holdings -= crypto_to_sell
+                # Calculate cost basis of the sold portion using average cost
+                proportion_sold = crypto_to_sell / self.crypto_holdings
+                cost_basis_of_sale = self.total_cost_basis * proportion_sold
 
                 # The primary reward: profit from the sale
-                reward = (proceeds - fee) - cost_basis
+                reward = net_proceeds - cost_basis_of_sale
 
+                # Update state
+                self.balance += net_proceeds
+                self.crypto_holdings -= crypto_to_sell
+                self.total_cost_basis -= cost_basis_of_sale
+
+            # if crypto is worth nothing and the balance is very low, end the episode
+            elif self.balance < 1: # Reset if holdings are negligible
+                reward = self.balance - self.initial_balance
+                self.done = True
+            
+            # Not enough crypto to sell
+            else:
+                reward = -1.0  # Small penalty for trying to sell without holdings
+
+        elif action == Actions.Hold:
+            pass
+
+        self.last_portfolio_value = current_portfolio_value
         self.current_step += 1
         if self.current_step >= len(self.crypto_prices) - 1:
             self.done = True
@@ -103,17 +128,15 @@ class CryptoTraderEnv(gym.Env):
         return self._get_observation(), reward, self.done, False, {}
 
     def _get_observation(self):
-        return np.array([
-            self.balance,
-            self.crypto_holdings,
-            self.crypto_prices[self.current_step]
-        ])
-
-    def _generate_dummy_prices(self, n_steps=1000):
-        # Generate a simple sine wave with some noise for dummy prices
-        time = np.arange(0, n_steps)
-        prices = 50000 + 10000 * np.sin(time * 0.1) + np.random.normal(0, 2000, n_steps)
-        return prices
+        price_window = self.crypto_prices[self.current_step - self.window_size : self.current_step]
+        return np.concatenate((
+            [self.balance, self.crypto_holdings],
+            price_window
+        ))
+    
+    def _get_assets_value(self):
+        current_price = self.crypto_prices[self.current_step]
+        return self.balance + self.crypto_holdings * current_price
 
     def render(self, mode='human', close=False):
         current_price = self.crypto_prices[self.current_step]
