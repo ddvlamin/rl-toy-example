@@ -169,11 +169,13 @@ if __name__ == '__main__':
     crypto_prices_df = subsample_data(crypto_prices_df_1min, freq='D')
     print(f"Subsampled data points (hourly): {len(crypto_prices_df)}")
 
+    feature_window_size = 30
+
     # 1. Create the base environment
     base_env = CryptoTraderEnv(
         initial_balance=1000,
         crypto_prices=crypto_prices_df["close_eur"].values,
-        window_size=30
+        window_size=feature_window_size
     )
     # 2. Wrap it with a Monitor to automatically track episode stats (like terminal_observation)
     monitored_env = Monitor(base_env)
@@ -194,10 +196,10 @@ if __name__ == '__main__':
         batch_size=20,
         gradient_steps=10000,
         gamma=0.9999,
-        train_freq=len(crypto_prices_df),  # Update the model 
-        target_update_interval=len(crypto_prices_df), # Update the target network
+        train_freq=len(crypto_prices_df)-feature_window_size,  # Update the model 
+        target_update_interval=len(crypto_prices_df)-feature_window_size, # Update the target network
         buffer_size=2000, # Size of the replay buffer
-        learning_starts=30, # Number of steps to collect before training starts
+        learning_starts=0, # Number of steps to collect before training starts
         # --- Exploration parameters ---
         # The fraction of total training steps to anneal (decay) exploration rate
         #exploration_fraction=0.02,

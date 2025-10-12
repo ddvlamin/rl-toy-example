@@ -28,10 +28,10 @@ class CryptoTraderEnv(gym.Env):
         self.action_space = gym.spaces.Discrete(len(Actions))
 
         # Observation space: [balance, crypto_holdings, current_price]
-        self.observation_space = gym.spaces.Box( # holdings_normalized, price_window_normalized
+        self.observation_space = gym.spaces.Box(
             low=0,
-            high=np.inf,
-            shape=(5,),
+            high=np.inf, # can be np.inf as values are normalized
+            shape=(6,),
             dtype=np.float32
         )
 
@@ -41,6 +41,7 @@ class CryptoTraderEnv(gym.Env):
         super().reset(seed=seed)
         self.balance = self.initial_balance
         self.crypto_holdings = 0.0
+        self.total_cost_of_holdings = 0.0
         self.current_step = self.window_size
         self.done = False
         self.last_portfolio_value = self.initial_balance
@@ -78,6 +79,7 @@ class CryptoTraderEnv(gym.Env):
                 fee = self.transaction_fee_percent * self.balance
                 buy_amount = self.balance - fee
                 self.crypto_holdings += buy_amount / current_price
+                self.total_cost_of_holdings += buy_amount
                 self.balance = 0
 
         elif action == Actions.Sell:
@@ -87,6 +89,7 @@ class CryptoTraderEnv(gym.Env):
                 fee = self.transaction_fee_percent * sell_amount
                 sell_amount -= fee
                 self.balance += sell_amount
+                self.total_cost_of_holdings = 0.0
                 self.crypto_holdings = 0
 
         elif action == Actions.Hold:
@@ -99,13 +102,19 @@ class CryptoTraderEnv(gym.Env):
         price_window[0] = self.crypto_prices[self.current_step - self.window_size] / current_price
         price_window[1] = self.crypto_prices[self.current_step] / current_price
         price_window[2] = (price_window[1] - price_window[0]) / self.window_size
+
+        if self.crypto_holdings > 0:
+            average_cost = self.total_cost_of_holdings / self.crypto_holdings
+            normalized_avg_cost = average_cost / current_price
+        else:
+            normalized_avg_cost = 0.0
         
         # Normalize holdings by portfolio value
         portfolio_value = self._get_assets_value()
         holdings_value = self.crypto_holdings * current_price
         
         # obs: [cash_fraction, holdings_fraction, normalized_price_window...]
-        return np.concatenate(([self.balance / portfolio_value, holdings_value / portfolio_value], price_window))
+        return np.concatenate(([self.balance / portfolio_value, holdings_value / portfolio_value, normalized_avg_cost], price_window))
     
     def _get_assets_value(self):
         current_price = self.crypto_prices[self.current_step]
