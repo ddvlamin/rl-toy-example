@@ -182,9 +182,13 @@ if __name__ == '__main__':
 
     # For DQN, hyperparameters like buffer_size, train_freq, and target_update_interval
     # are passed during initialization, not during .learn()
+    policy_kwargs = dict(
+        net_arch=[32, 32]  # Two hidden layers with 32 neurons each
+    )
     model = DQN(
         "MlpPolicy",
         env,
+        policy_kwargs=policy_kwargs,
         verbose=2,
         learning_rate=1e-3,
         batch_size=20,
