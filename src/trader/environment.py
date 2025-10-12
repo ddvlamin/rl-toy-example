@@ -1,5 +1,6 @@
 import gymnasium as gym
 import numpy as np
+import math
 from enum import IntEnum
 
 class Actions(IntEnum):
@@ -13,18 +14,13 @@ class CryptoTraderEnv(gym.Env):
     """
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, initial_balance=1000, initial_crypto_holdings=0, crypto_prices=None, transaction_fee_percent=0.01, window_size=10):
+    def __init__(self, initial_balance=1000, crypto_prices=None, transaction_fee_percent=0.01, window_size=10):
         super(CryptoTraderEnv, self).__init__()
 
         self.initial_balance = initial_balance
-        self.initial_crypto_holdings = initial_crypto_holdings
         self.crypto_prices = crypto_prices
         self.transaction_fee_percent = transaction_fee_percent
         self.window_size = window_size
-
-
-        # Internal state for tracking average cost basis
-        self.total_cost_basis = 0.0
 
         self.current_step = 0
 
@@ -32,10 +28,10 @@ class CryptoTraderEnv(gym.Env):
         self.action_space = gym.spaces.Discrete(len(Actions))
 
         # Observation space: [balance, crypto_holdings, current_price]
-        self.observation_space = gym.spaces.Box(
+        self.observation_space = gym.spaces.Box( # holdings_normalized, price_window_normalized
             low=0,
             high=np.inf,
-            shape=(self.window_size+2,),
+            shape=(5,),
             dtype=np.float32
         )
 
@@ -44,95 +40,72 @@ class CryptoTraderEnv(gym.Env):
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.balance = self.initial_balance
-        self.crypto_holdings = self.initial_crypto_holdings
+        self.crypto_holdings = 0.0
         self.current_step = self.window_size
-        self.total_cost_basis = 0.0
         self.done = False
-        self.last_portfolio_value = self._get_assets_value()
+        self.last_portfolio_value = self.initial_balance
         return self._get_observation(), {}
 
     def step(self, action):
         if self.done:
             # If the episode is over, just return the final state
             return self._get_observation(), 0.0, self.done, False, {}
-
-        current_price = self.crypto_prices[self.current_step]
+        
+        # 1. Execute the action
+        self._execute_trade(action)
+        
+        # 2. Update the step and check for episode end
+        self.current_step += 1
+        if self.current_step >= len(self.crypto_prices) - 1:
+            self.done = True
+            
+        # 3. Calculate reward based on portfolio value change
         current_portfolio_value = self._get_assets_value()
-        reward = 0.0
+        reward = math.log(current_portfolio_value / self.last_portfolio_value) # Log-return reward
+        self.last_portfolio_value = current_portfolio_value
+        
+        # 4. Get the next observation
+        obs = self._get_observation()
+        
+        return obs, reward, self.done, False, {}
+    
+    def _execute_trade(self, action):
+        current_price = self.crypto_prices[self.current_step]
 
         if action == Actions.Buy:
-            if self.balance > 1:
-                # Spend 50% of balance to buy crypto
-                spend_amount = self.balance * 0.5
-                # The fee is part of the spend, not extra
-                fee = spend_amount * self.transaction_fee_percent
-                net_spend = spend_amount - fee
-                amount_to_buy = net_spend / current_price
-
-                self.crypto_holdings += amount_to_buy
-                self.balance -= spend_amount
-                self.total_cost_basis += net_spend
-
-                #reward = current_portfolio_value - self.last_portfolio_value
-
-                # Small penalty for transaction cost/discouraging frantic trading
-                reward -= fee
-
-            # if balance is very low and crypto is worth nothing, end the episode
-            elif self.crypto_holdings * current_price < 1:
-                reward = self.balance - self.initial_balance
-                self.done = True
-            
-            # Not enough balance to buy
-            else:
-                reward = -1.0  # Small penalty for trying to buy without funds
+            # Buy with all available balance
+            if self.balance > 0:
+                fee = self.transaction_fee_percent * self.balance
+                buy_amount = self.balance - fee
+                self.crypto_holdings += buy_amount / current_price
+                self.balance = 0
 
         elif action == Actions.Sell:
-            if self.crypto_holdings * current_price > 1:
-                # Sell 50% of holdings
-                crypto_to_sell = self.crypto_holdings * 0.5
-
-                proceeds = crypto_to_sell * current_price
-                fee = proceeds * self.transaction_fee_percent
-                net_proceeds = proceeds - fee
-                
-                # Calculate cost basis of the sold portion using average cost
-                proportion_sold = crypto_to_sell / self.crypto_holdings
-                cost_basis_of_sale = self.total_cost_basis * proportion_sold
-
-                # The primary reward: profit from the sale
-                reward = net_proceeds - cost_basis_of_sale
-
-                # Update state
-                self.balance += net_proceeds
-                self.crypto_holdings -= crypto_to_sell
-                self.total_cost_basis -= cost_basis_of_sale
-
-            # if crypto is worth nothing and the balance is very low, end the episode
-            elif self.balance < 1: # Reset if holdings are negligible
-                reward = self.balance - self.initial_balance
-                self.done = True
-            
-            # Not enough crypto to sell
-            else:
-                reward = -1.0  # Small penalty for trying to sell without holdings
+            # Sell all available holdings
+            if self.crypto_holdings > 0:
+                sell_amount = self.crypto_holdings * current_price
+                fee = self.transaction_fee_percent * sell_amount
+                sell_amount -= fee
+                self.balance += sell_amount
+                self.crypto_holdings = 0
 
         elif action == Actions.Hold:
             pass
 
-        self.last_portfolio_value = current_portfolio_value
-        self.current_step += 1
-        if self.current_step >= len(self.crypto_prices) - 1:
-            self.done = True
-
-        return self._get_observation(), reward, self.done, False, {}
-
     def _get_observation(self):
-        price_window = self.crypto_prices[self.current_step - self.window_size : self.current_step]
-        return np.concatenate((
-            [self.balance, self.crypto_holdings],
-            price_window
-        ))
+        # Normalize the price window by dividing by the current price
+        current_price = self.crypto_prices[self.current_step]
+        price_window = np.zeros((3,))
+        price_window[0] = self.crypto_prices[self.current_step - self.window_size] / current_price
+        price_window[1] = self.crypto_prices[self.current_step] / current_price
+        price_window[2] = (price_window[1] - price_window[0]) / self.window_size
+        
+        # Normalize holdings by portfolio value
+        portfolio_value = self._get_assets_value()
+        holdings_value = self.crypto_holdings * current_price
+        
+        # obs: [cash_fraction, holdings_fraction, normalized_price_window...]
+        return np.concatenate(([self.balance / portfolio_value, holdings_value / portfolio_value], price_window))
     
     def _get_assets_value(self):
         current_price = self.crypto_prices[self.current_step]

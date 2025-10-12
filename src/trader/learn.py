@@ -97,30 +97,35 @@ class EpisodeSummaryCallback(BaseCallback):
             info = self.locals['infos'][0]
             episode = info.get('episode')
             terminal_obs = info.get('terminal_observation')
+
+             # Update any final state if needed
             #print(self.locals)
             #for kk, vv in self.model.get_parameters()['policy'].items():
             #    print(kk, vv.shape)
             #print("----------------------------------------------")
 
             if terminal_obs is not None:
-                # The terminal_observation contains the final state before the reset.
-                # obs format: [balance, crypto_holdings, price_window...]
-                final_balance = terminal_obs[0]
-                final_holdings = terminal_obs[1]
-                # The last known price is the last element of the price window in the observation
-                last_price = terminal_obs[-1]
-                final_portfolio_value = final_balance + (final_holdings * last_price)
-
                 # Get initial balance from the underlying environment
                 initial_balance = self.training_env.get_attr('initial_balance')[0]
+                crypto_prices = self.training_env.get_attr('crypto_prices')[0]
+                last_price = crypto_prices[self.last_step]
 
                 print(f"\n--- Episode End Summary (Timestep: {self.num_timesteps}) ---")
                 print(f"Lasted {episode['l']} timesteps")
+                print(f"Last step {self.last_step}")
                 print(f"Collected rewards: {episode['r']}")
-                print(f"Final Portfolio Value: {final_portfolio_value:.2f}")
-                print(f"Profit/Loss: {final_portfolio_value - initial_balance:.2f}")
-                print(f"Final Balance: {final_balance:.2f}")
-                print(f"Final Holdings: {final_holdings:.6f}")
+                print(f"Initial balance: {initial_balance:.2f}")
+                print(f"Last asset value: {self.last_asset_value:.2f}")
+                print(f"Profit/Loss: {self.last_asset_value - initial_balance:.2f}")
+                print(f"Last Balance: {self.last_balance:.2f}")
+                print(f"Last Holdings: {self.last_crypto_holdings:.6f}")
+                print(f"Last price: {last_price:.6f}")
+        else:
+            self.last_asset_value = self.training_env.envs[0].env._get_assets_value()
+            self.last_crypto_holdings = self.training_env.get_attr('crypto_holdings')[0]
+            self.last_balance = self.training_env.get_attr('balance')[0]
+            self.last_step = self.training_env.get_attr('current_step')[0]
+
         return True # Continue training
 
 class StopTrainingOnEpisodeCount(BaseCallback):
@@ -167,7 +172,6 @@ if __name__ == '__main__':
     # 1. Create the base environment
     base_env = CryptoTraderEnv(
         initial_balance=1000,
-        initial_crypto_holdings=0,
         crypto_prices=crypto_prices_df["close_eur"].values,
         window_size=30
     )
@@ -184,16 +188,16 @@ if __name__ == '__main__':
         verbose=2,
         learning_rate=1e-3,
         batch_size=20,
-        gradient_steps=1000,
+        gradient_steps=10000,
         gamma=0.9999,
-        train_freq=14,  # Update the model 
-        target_update_interval=14, # Update the target network
+        train_freq=len(crypto_prices_df),  # Update the model 
+        target_update_interval=len(crypto_prices_df), # Update the target network
         buffer_size=2000, # Size of the replay buffer
-        learning_starts=14, # Number of steps to collect before training starts
+        learning_starts=30, # Number of steps to collect before training starts
         # --- Exploration parameters ---
         # The fraction of total training steps to anneal (decay) exploration rate
         #exploration_fraction=0.02,
-        exploration_initial_eps=0.05, # Start with 100% random actions
+        exploration_initial_eps=0.1, # Start with 100% random actions
         #exploration_final_eps=0.05,  # End with 5% random actions
     )
 
