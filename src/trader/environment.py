@@ -22,7 +22,7 @@ class CryptoTraderEnv(gym.Env):
         self.transaction_fee_percent = transaction_fee_percent
         self.window_size = window_size
 
-        self.current_step = 0
+        self.current_step = self.window_size
 
         # Action space: 0: Hold, 1: Buy, 2: Sell
         self.action_space = gym.spaces.Discrete(len(Actions))
@@ -41,10 +41,11 @@ class CryptoTraderEnv(gym.Env):
         super().reset(seed=seed)
         self.balance = self.initial_balance
         self.crypto_holdings = 0.0
-        self.total_cost_of_holdings = 0.0
         self.current_step = self.window_size
         self.done = False
         self.last_portfolio_value = self.initial_balance
+        self.avg_cost_of_holdings = 0.0
+        self.avg_profit = self.crypto_prices[0]
         return self._get_observation(), {}
 
     def step(self, action):
@@ -79,8 +80,9 @@ class CryptoTraderEnv(gym.Env):
                 fee = self.transaction_fee_percent * self.balance
                 buy_amount = self.balance - fee
                 self.crypto_holdings += buy_amount / current_price
-                self.total_cost_of_holdings += buy_amount
                 self.balance = 0
+                self.avg_profit = 0.0
+                self.avg_cost_of_holdings = current_price
 
         elif action == Actions.Sell:
             # Sell all available holdings
@@ -89,8 +91,9 @@ class CryptoTraderEnv(gym.Env):
                 fee = self.transaction_fee_percent * sell_amount
                 sell_amount -= fee
                 self.balance += sell_amount
-                self.total_cost_of_holdings = 0.0
                 self.crypto_holdings = 0
+                self.avg_cost_of_holdings = 0.0
+                self.avg_profit = current_price
 
         elif action == Actions.Hold:
             pass
@@ -98,23 +101,27 @@ class CryptoTraderEnv(gym.Env):
     def _get_observation(self):
         # Normalize the price window by dividing by the current price
         current_price = self.crypto_prices[self.current_step]
-        price_window = np.zeros((3,))
+        price_window = np.zeros((2,))
         price_window[0] = self.crypto_prices[self.current_step - self.window_size] / current_price
-        price_window[1] = self.crypto_prices[self.current_step] / current_price
-        price_window[2] = (price_window[1] - price_window[0]) / self.window_size
-
-        if self.crypto_holdings > 0:
-            average_cost = self.total_cost_of_holdings / self.crypto_holdings
-            normalized_avg_cost = average_cost / current_price
-        else:
-            normalized_avg_cost = 0.0
+        #price_window[1] = self.crypto_prices[self.current_step] / current_price
+        price_window[1] = (1.0 - price_window[0]) / self.window_size
+            
+        normalized_avg_cost = self.avg_cost_of_holdings / current_price
+        normalized_avg_profit = self.avg_profit / current_price
         
         # Normalize holdings by portfolio value
         portfolio_value = self._get_assets_value()
         holdings_value = self.crypto_holdings * current_price
         
         # obs: [cash_fraction, holdings_fraction, normalized_price_window...]
-        return np.concatenate(([self.balance / portfolio_value, holdings_value / portfolio_value, normalized_avg_cost], price_window))
+        return np.concatenate((
+            [
+                self.balance / portfolio_value, 
+                holdings_value / portfolio_value, 
+                normalized_avg_cost,
+                normalized_avg_profit
+            ], 
+            price_window))
     
     def _get_assets_value(self):
         current_price = self.crypto_prices[self.current_step]
@@ -122,7 +129,7 @@ class CryptoTraderEnv(gym.Env):
 
     def render(self, mode='human', close=False):
         current_price = self.crypto_prices[self.current_step]
-        portfolio_value = self.balance + self.crypto_holdings * current_price
+        portfolio_value = self._get_assets_value()
         print(f"Step: {self.current_step}")
         print(f"Balance: {self.balance:.2f}")
         print(f"Crypto Holdings: {self.crypto_holdings:.6f}")
