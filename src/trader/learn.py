@@ -1,4 +1,5 @@
 from pathlib import Path
+import os
 
 from stable_baselines3 import DQN
 from stable_baselines3 import DQN, common
@@ -7,18 +8,22 @@ from trader.environment import CryptoTraderEnv
 from stable_baselines3.common.callbacks import CallbackList
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.logger import configure
 
 from trader.sinusoid import generate_trending_sinusoid
 from trader.signals import subsample_data
-from trader.buffer import PrioritizedReplayBuffer
+#from trader.buffer import PrioritizedReplayBuffer
 
-from trader.callbacks import EpisodeSummaryCallback, StopTrainingOnEpisodeCount
+from trader.callbacks import EpisodeSummaryCallback, StopTrainingOnEpisodeCount, EpisodeLogger
 
 
 if __name__ == '__main__':
     data_path = Path('data/')
     crypto_file = data_path / 'FORMEUR_1m_1095days.tsv'
+    log_dir = Path("logs/")
+    os.makedirs(log_dir, exist_ok=True)
 
+    new_logger = configure(str(log_dir), ["stdout", "csv"])
 
     # Load the datasets
     print(f"Loading crypto data from: {crypto_file}")
@@ -32,7 +37,7 @@ if __name__ == '__main__':
 
     feature_window_size = 30
     # The length of one episode is the number of prices minus the window size.
-    episode_length = len(crypto_prices_df) - feature_window_size
+    episode_length = len(crypto_prices_df) - feature_window_size - 1
 
     # 1. Create the base environment
     base_env = CryptoTraderEnv(
@@ -41,7 +46,7 @@ if __name__ == '__main__':
         window_size=feature_window_size
     )
     # 2. Wrap it with a Monitor to automatically track episode stats (like terminal_observation)
-    monitored_env = Monitor(base_env)
+    monitored_env = Monitor(base_env, str(log_dir), info_keywords=("is_success",))
     # 3. Wrap it in a DummyVecEnv to make it compatible with SB3 algorithms
     vec_env = DummyVecEnv([lambda: monitored_env])
     # 4. Wrap it with VecNormalize to normalize observations
@@ -60,13 +65,13 @@ if __name__ == '__main__':
         verbose=2,
         learning_rate=1e-3,
         batch_size=40,
-        replay_buffer_class=PrioritizedReplayBuffer,
-        replay_buffer_kwargs=dict(top_priority_count=int(324*100/2)),
+        #replay_buffer_class=PrioritizedReplayBuffer,
+        #replay_buffer_kwargs=dict(top_priority_count=int(episode_length*100/2)),
         gradient_steps=1000,
         gamma=0.9999,
-        train_freq=episode_length,  # Update the model 
-        target_update_interval=episode_length, # Update the target network
-        buffer_size=episode_length*100, # Size of the replay buffer
+        train_freq=episode_length,  # Update the model every episode
+        target_update_interval=episode_length, # Update the target network every episode
+        buffer_size=episode_length*100, # 100 episodes
         learning_starts=episode_length, # Number of steps to collect before training starts
         # --- Exploration parameters ---
         # The fraction of total training steps to anneal (decay) exploration rate
@@ -74,9 +79,10 @@ if __name__ == '__main__':
         exploration_initial_eps=0.3, # Start with 100% random actions
         exploration_final_eps=0.05,  # End with 5% random actions
     )
+    model.set_logger(new_logger)
 
     # Set the model in the custom replay buffer after model initialization
-    model.replay_buffer.model = model
+    #model.replay_buffer.model = model
 
     # --- Training ---
     # Define the number of episodes to train for
@@ -86,8 +92,9 @@ if __name__ == '__main__':
 
     # Create the callbacks
     episode_log_callback = EpisodeSummaryCallback()
+    episode_logger = EpisodeLogger(logfile=str(log_dir / "episode_steps_log.tsv"))
     # The StopTrainingOnEpisodeCount callback is no longer needed as we provide a finite total_timesteps.
-    callback_list = CallbackList([episode_log_callback])
+    callback_list = CallbackList([episode_logger,episode_log_callback])
 
     print(f"Training for {num_episodes_to_train} episodes (approx. {total_timesteps_estimate} timesteps).")
     model.learn(
@@ -98,7 +105,7 @@ if __name__ == '__main__':
 
     # --- Saving ---
     # Save the model
-    model.save("dqn_crypto_trader_2")
+    model.save("dqn_crypto_trader")
     # IMPORTANT: Save the VecNormalize statistics
     env.save("vec_normalize_stats.pkl")
     print("Training complete. Model saved as 'dqn_crypto_trader'.")
