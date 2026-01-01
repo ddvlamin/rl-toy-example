@@ -14,13 +14,14 @@ class CryptoTraderEnv(gym.Env):
     """
     metadata = {'render.modes': ['human']}
 
-    def __init__(self, initial_balance=1000, crypto_prices=None, transaction_fee_percent=0.01, window_size=10):
+    def __init__(self, initial_balance=1000, crypto_prices=None, transaction_fee_percent=0.01, window_size=10, invalid_action_penalty=0.1):
         super(CryptoTraderEnv, self).__init__()
 
         self.initial_balance = initial_balance
         self.crypto_prices = crypto_prices
         self.transaction_fee_percent = transaction_fee_percent
         self.window_size = window_size
+        self.invalid_action_penalty = invalid_action_penalty
 
         self.current_step = self.window_size
 
@@ -52,9 +53,9 @@ class CryptoTraderEnv(gym.Env):
         #if self.done:
             # If the episode is over, just return the final state
         #    return self._get_observation(), 0.0, self.done, False, {}
-        
+
         # 1. Execute the action
-        self._execute_trade(action)
+        penalty = self._execute_trade(action)
         
         # 2. Update the step and check for episode end
         self.current_step += 1
@@ -64,6 +65,7 @@ class CryptoTraderEnv(gym.Env):
         # 3. Calculate reward based on portfolio value change
         current_portfolio_value = self._get_assets_value()
         reward = math.log(current_portfolio_value / self.last_portfolio_value) # Log-return reward
+        reward += penalty
         self.last_portfolio_value = current_portfolio_value
         
         # 4. Get the next observation
@@ -83,6 +85,9 @@ class CryptoTraderEnv(gym.Env):
                 self.balance = 0
                 self.avg_profit = 0.0
                 self.avg_cost_of_holdings = current_price
+                return 0.0
+            else:
+                return -self.invalid_action_penalty
 
         elif action == Actions.Sell:
             # Sell all available holdings
@@ -94,6 +99,9 @@ class CryptoTraderEnv(gym.Env):
                 self.crypto_holdings = 0
                 self.avg_cost_of_holdings = 0.0
                 self.avg_profit = current_price
+                return 0.0
+            else:
+                return -self.invalid_action_penalty
 
         elif action == Actions.Hold:
             pass
