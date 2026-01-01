@@ -31,7 +31,7 @@ class CryptoTraderEnv(gym.Env):
         self.observation_space = gym.spaces.Box(
             low=0,
             high=np.inf, # can be np.inf as values are normalized
-            shape=(6,),
+            shape=(7,),
             dtype=np.float32
         )
 
@@ -49,9 +49,9 @@ class CryptoTraderEnv(gym.Env):
         return self._get_observation(), {}
 
     def step(self, action):
-        if self.done:
+        #if self.done:
             # If the episode is over, just return the final state
-            return self._get_observation(), 0.0, self.done, False, {}
+        #    return self._get_observation(), 0.0, self.done, False, {}
         
         # 1. Execute the action
         self._execute_trade(action)
@@ -69,7 +69,7 @@ class CryptoTraderEnv(gym.Env):
         # 4. Get the next observation
         obs = self._get_observation()
         
-        return obs, reward, self.done, False, {}
+        return obs, reward, self.done, False, { "is_success": current_portfolio_value > self.initial_balance }
     
     def _execute_trade(self, action):
         current_price = self.crypto_prices[self.current_step]
@@ -99,29 +99,22 @@ class CryptoTraderEnv(gym.Env):
             pass
 
     def _get_observation(self):
-        # Normalize the price window by dividing by the current price
+        # Return raw, unnormalized values. VecNormalize will handle normalization.
+        price_start = self.crypto_prices[self.current_step - self.window_size]
         current_price = self.crypto_prices[self.current_step]
-        price_window = np.zeros((2,))
-        price_window[0] = self.crypto_prices[self.current_step - self.window_size] / current_price
-        #price_window[1] = self.crypto_prices[self.current_step] / current_price
-        price_window[1] = (1.0 - price_window[0]) / self.window_size
-            
-        normalized_avg_cost = self.avg_cost_of_holdings / current_price
-        normalized_avg_profit = self.avg_profit / current_price
-        
-        # Normalize holdings by portfolio value
-        portfolio_value = self._get_assets_value()
-        holdings_value = self.crypto_holdings * current_price
-        
-        # obs: [cash_fraction, holdings_fraction, normalized_price_window...]
+        price_trend = (current_price - price_start) / self.window_size
+
         return np.concatenate((
             [
-                self.balance / portfolio_value, 
-                holdings_value / portfolio_value, 
-                normalized_avg_cost,
-                normalized_avg_profit
-            ], 
-            price_window))
+                self.balance,
+                self.crypto_holdings,
+                current_price,
+                self.avg_cost_of_holdings,
+                self.avg_profit,
+                price_start,
+                price_trend,
+            ],
+        ))
     
     def _get_assets_value(self):
         current_price = self.crypto_prices[self.current_step]
