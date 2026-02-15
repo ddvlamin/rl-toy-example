@@ -14,6 +14,7 @@ from trader.sinusoid import generate_trending_sinusoid
 from trader.signals import subsample_data
 #from trader.buffer import PrioritizedReplayBuffer
 
+from trader.custom_dqn import LoggingDQN
 from trader.callbacks import EpisodeSummaryCallback, StopTrainingOnEpisodeCount, EpisodeLogger
 
 
@@ -24,6 +25,7 @@ if __name__ == '__main__':
     os.makedirs(log_dir, exist_ok=True)
 
     new_logger = configure(str(log_dir), ["stdout", "csv"])
+    new_logger = configure(str(log_dir), ["stdout", "csv", "tensorboard"])
 
     # Load the datasets
     print(f"Loading crypto data from: {crypto_file}")
@@ -56,9 +58,9 @@ if __name__ == '__main__':
     # For DQN, hyperparameters like buffer_size, train_freq, and target_update_interval
     # are passed during initialization, not during .learn()
     policy_kwargs = dict(
-        net_arch=[16, 16],  # Two hidden layers with 32 neurons each
+        net_arch=[32, 32, 32],  # Two hidden layers with 32 neurons each
     )
-    model = DQN(
+    model = LoggingDQN(
         "MlpPolicy",
         env,
         policy_kwargs=policy_kwargs,
@@ -70,7 +72,7 @@ if __name__ == '__main__':
         gradient_steps=1000,
         gamma=0.9999,
         train_freq=episode_length,  # Update the model every episode
-        target_update_interval=episode_length, # Update the target network every episode
+        target_update_interval=episode_length*10, # Update the target network every 10 episodes
         buffer_size=episode_length*100, # 100 episodes
         learning_starts=episode_length, # Number of steps to collect before training starts
         # --- Exploration parameters ---
@@ -86,7 +88,7 @@ if __name__ == '__main__':
 
     # --- Training ---
     # Define the number of episodes to train for
-    num_episodes_to_train = 1000
+    num_episodes_to_train = 5000
     # Calculate the approximate total timesteps. This is needed for the exploration decay schedule.
     total_timesteps_estimate = num_episodes_to_train * episode_length
 

@@ -104,7 +104,7 @@ class CryptoTraderEnv(gym.Env):
                 return -self.invalid_action_penalty
 
         elif action == Actions.Hold:
-            pass
+            return 0.0
 
     def _get_observation(self):
         # Return raw, unnormalized values. VecNormalize will handle normalization.

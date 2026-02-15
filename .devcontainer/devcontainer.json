@@ -10,7 +10,8 @@
                 "ms-python.vscode-pylance",
                 "ms-toolsai.jupyter",
                 "google.geminicodeassist",
-                "mechatroner.rainbow-csv"
+                "mechatroner.rainbow-csv",
+                "ms-toolsai.datawrangler"
             ],
             "settings": {
                 "python.defaultInterpreterPath": "/usr/local/bin/python"

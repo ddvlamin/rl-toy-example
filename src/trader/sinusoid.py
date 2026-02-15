@@ -44,7 +44,7 @@ def generate_trending_sinusoid(
     prices = trend + sinusoid #+ noise
 
     # 6. Create a pandas DataFrame with a datetime index
-    timestamps = pd.to_datetime(pd.date_range(start='2023-01-01', periods=total_minutes, freq='T'))
+    timestamps = pd.to_datetime(pd.date_range(start='2023-01-01', periods=total_minutes, freq='min'))
     
     df = pd.DataFrame({
         'timestamp': timestamps,
