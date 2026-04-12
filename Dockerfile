@@ -21,6 +21,7 @@ USER root
 # [Optional] Add sudo support for the non-root user
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get -y install --no-install-recommends npm libsecret-1-0 sudo \
+    && npm install -g @google/gemini-cli \
     && echo "vscode ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/vscode
 
 # [Optional] Set the default user. Omit if you want to connect as root.
