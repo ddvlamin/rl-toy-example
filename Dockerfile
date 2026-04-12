@@ -1,5 +1,5 @@
 # See here for image contents: https://github.com/microsoft/vscode-dev-containers/tree/v0.245.2/containers/python-3
-FROM mcr.microsoft.com/devcontainers/python:3.14
+FROM mcr.microsoft.com/devcontainers/python:3.12
 
 # Install uv
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -20,7 +20,7 @@ USER root
 
 # [Optional] Add sudo support for the non-root user
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
-    && apt-get -y install --no-install-recommends sudo \
+    && apt-get -y install --no-install-recommends npm libsecret-1-0 sudo \
     && echo "vscode ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/vscode
 
 # [Optional] Set the default user. Omit if you want to connect as root.

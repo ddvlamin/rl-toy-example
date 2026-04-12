@@ -10,9 +10,10 @@ venv/
 .venv/
 env/
 
-# IDE and editor files
-.vscode/
-.idea/
+# Environment variables
+.env
+.env.local
+
 
 # Operating System files
 .DS_Store

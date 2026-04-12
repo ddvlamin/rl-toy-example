@@ -11,7 +11,8 @@
                 "ms-toolsai.jupyter",
                 "google.geminicodeassist",
                 "mechatroner.rainbow-csv",
-                "ms-toolsai.datawrangler"
+                "ms-toolsai.datawrangler",
+                "google.gemini-cli-vscode-ide-companion"
             ],
             "settings": {
                 "python.defaultInterpreterPath": ".venv/bin/python"
