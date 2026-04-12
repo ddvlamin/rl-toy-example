@@ -19,6 +19,7 @@ class LoggingDQN(DQN):
         input_means = []
         output_means = []
         target_means = []
+        next_q_means = []
 
         for _ in range(gradient_steps):
             # Sample replay buffer
@@ -30,6 +31,7 @@ class LoggingDQN(DQN):
                 # Follow Greedy Policy: use the one with the highest value
                 next_q_values, _ = next_q_values.max(dim=1)
                 next_q_values = next_q_values.reshape(-1, 1)
+                next_q_means.append(next_q_values.mean().item())
                 # 1-step TD target
                 target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_values
 
@@ -69,3 +71,4 @@ class LoggingDQN(DQN):
         self.logger.record("train/mean_input_observation", np.mean(input_means))
         self.logger.record("train/mean_output_q_value", np.mean(output_means))
         self.logger.record("train/mean_target_q_value", np.mean(target_means))
+        self.logger.record("train/mean_next_q_value", np.mean(next_q_means))

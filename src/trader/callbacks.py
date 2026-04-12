@@ -1,15 +1,17 @@
 import numpy as np
+import torch as th
 from stable_baselines3.common.callbacks import BaseCallback
 
 class EpisodeLogger(BaseCallback):
     """
-    A custom callback that logs information at the end of each episode.
+    A custom callback that logs information for each step
     """
     def __init__(self, logfile, verbose: int = 0):
         super(EpisodeLogger, self).__init__(verbose)
         self.logfile = open(logfile, 'w')
         #write header
         self.logfile.write("episode\tstep\taction\treward\t" +
+                        "policy_q\ttarget_q\t" +
                         "orig_balance\torig_holdings\torig_current_price\t" +
                         "orig_avg_cost\torig_avg_profit\torig_price_start\torig_price_trend\t" + 
                         "obs_balance\tobs_holdings\tobs_current_price\t" +
@@ -56,8 +58,19 @@ class EpisodeLogger(BaseCallback):
                 ep_rew_mean = np.mean(rewards_deque)
                 #print(f"Mean reward over last {len(rewards_deque)} episodes: {ep_rew_mean:.2f}")        
 
+        # Calculate Q-values
+        obs = self.model._last_obs
+        obs_tensor, _ = self.model.policy.obs_to_tensor(obs)
+        with th.no_grad():
+            q_values = self.model.q_net(obs_tensor)
+            q_values_target = self.model.q_net_target(obs_tensor)
+        
+        policy_q = q_values[0, int(action)].item()
+        target_q = q_values_target[0, int(action)].item()
+
         #write to logfile as tsv
         self.logfile.write(f"{episode}\t{step}\t{action}\t{reward}\t" +
+                           f"{policy_q:.6f}\t{target_q:.6f}\t" +
                            "\t".join([f"{x:.6f}" for x in original_observation]) + "\t" +
                            "\t".join([f"{x:.6f}" for x in observation]) + "\n")
 

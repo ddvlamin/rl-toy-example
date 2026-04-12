@@ -25,7 +25,6 @@ if __name__ == '__main__':
     os.makedirs(log_dir, exist_ok=True)
 
     new_logger = configure(str(log_dir), ["stdout", "csv"])
-    new_logger = configure(str(log_dir), ["stdout", "csv", "tensorboard"])
 
     # Load the datasets
     print(f"Loading crypto data from: {crypto_file}")
