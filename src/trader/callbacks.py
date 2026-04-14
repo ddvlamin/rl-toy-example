@@ -9,13 +9,13 @@ class EpisodeLogger(BaseCallback):
     def __init__(self, logfile, verbose: int = 0):
         super(EpisodeLogger, self).__init__(verbose)
         self.logfile = open(logfile, 'w')
-        #write header
+        # write header
         self.logfile.write("episode\tstep\taction\treward\t" +
                         "policy_q\ttarget_q\t" +
-                        "orig_balance\torig_holdings\torig_current_price\t" +
-                        "orig_avg_cost\torig_avg_profit\torig_price_start\torig_price_trend\t" + 
-                        "obs_balance\tobs_holdings\tobs_current_price\t" +
-                        "obs_avg_cost\tobs_avg_profit\tobs_price_start\tobs_price_trend\n")
+                        "orig_log_return\torig_balance_ratio\torig_holdings_ratio\t" +
+                        "orig_price_trend\torig_profit_ratio\torig_price_diff_last_action\torig_portfolio_ratio\t" + 
+                        "obs_log_return\tobs_balance_ratio\tobs_holdings_ratio\t" +
+                        "obs_price_trend\tobs_profit_ratio\tobs_price_diff_last_action\tobs_portfolio_ratio\n")
         self.episode_length = None
 
     def _on_training_start(self) -> None:
@@ -98,45 +98,30 @@ class EpisodeSummaryCallback(BaseCallback):
         """
         # Check if the episode is done (dones is a list for vectorized envs)
         if self.locals['dones'][0]:
-            # The 'info' dictionary contains the 'terminal_observation' when an episode ends,
-            # captured by the Monitor wrapper.
             info = self.locals['infos'][0]
             episode = info.get('episode')
-            terminal_obs = info.get('terminal_observation')
+            
+            # Get values directly from the environment
+            initial_balance = self.training_env.get_attr('initial_balance')[0]
+            balance = self.training_env.get_attr('balance')[0]
+            crypto_holdings = self.training_env.get_attr('crypto_holdings')[0]
+            current_step = self.training_env.get_attr('current_step')[0]
+            crypto_prices = self.training_env.get_attr('crypto_prices')[0]
+            current_price = crypto_prices[current_step]
+            avg_cost = self.training_env.get_attr('avg_cost_of_holdings')[0]
+            
+            final_asset_value = balance + crypto_holdings * current_price
 
-             # Update any final state if needed
-            #print(self.locals)
-            #for kk, vv in self.model.get_parameters()['policy'].items():
-            #    print(kk, vv.shape)
-            #print("----------------------------------------------")
-
-            if terminal_obs is not None:
-                # Get initial balance from the underlying environment
-                initial_balance = self.training_env.get_attr('initial_balance')[0]
-                
-                # Unnormalize the terminal observation to get real values
-                if hasattr(self.training_env, 'unnormalize_obs'):
-                    original_terminal_obs = self.training_env.unnormalize_obs(terminal_obs)
-                else:
-                    original_terminal_obs = terminal_obs
-                
-                # Calculate final asset value from the terminal state
-                final_asset_value = original_terminal_obs[0] + original_terminal_obs[1] * original_terminal_obs[2]
-
-                print(f"\n--- Episode End Summary (Timestep: {self.num_timesteps}) ---")
-                print(f"Lasted {episode['l']} timesteps")
-                print(f"Collected rewards: {episode['r']}")
-                print(f"Initial balance: {initial_balance:.2f}")
-                print(f"Last asset value: {final_asset_value:.2f}")
-                print(f"Profit/Loss: {final_asset_value - initial_balance:.2f}")
-                print(f"Last Balance: {original_terminal_obs[0]:.2f}")
-                print(f"Last Holdings: {original_terminal_obs[1]:.6f}")
-                print(f"Last Price: {original_terminal_obs[2]:.2f}")
-                print(f"Last Avg Cost: {original_terminal_obs[3]:.2f}")
-                print(f"Last Avg Profit:   {original_terminal_obs[4]:.2f}")
-                print(f"Last Price Start:  {original_terminal_obs[5]:.2f}")
-                print(f"Last Price Trend:  {original_terminal_obs[6]:.4f}")
-
+            print(f"\n--- Episode End Summary (Timestep: {self.num_timesteps}) ---")
+            print(f"Lasted {episode['l']} timesteps")
+            print(f"Collected rewards: {episode['r']}")
+            print(f"Initial balance: {initial_balance:.2f}")
+            print(f"Last asset value: {final_asset_value:.2f}")
+            print(f"Profit/Loss: {final_asset_value - initial_balance:.2f}")
+            print(f"Last Balance: {balance:.2f}")
+            print(f"Last Holdings: {crypto_holdings:.6f}")
+            print(f"Last Price: {current_price:.2f}")
+            print(f"Last Avg Cost: {avg_cost:.2f}")
 
         return True # Continue training
 

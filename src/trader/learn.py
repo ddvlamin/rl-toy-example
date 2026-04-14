@@ -34,7 +34,7 @@ if __name__ == '__main__':
     # Subsample the data to an hourly frequency
     print(f"Original data points: {len(crypto_prices_df_1min)}")
     crypto_prices_df = subsample_data(crypto_prices_df_1min, freq='D')
-    print(f"Subsampled data points (hourly): {len(crypto_prices_df)}")
+    print(f"Subsampled data points (daily): {len(crypto_prices_df)}")
 
     feature_window_size = 30
     # The length of one episode is the number of prices minus the window size.
@@ -44,7 +44,8 @@ if __name__ == '__main__':
     base_env = CryptoTraderEnv(
         initial_balance=1000,
         crypto_prices=crypto_prices_df["close_eur"].values,
-        window_size=feature_window_size
+        window_size=feature_window_size,
+        invalid_action_penalty=0.01 # Reduced penalty
     )
     # 2. Wrap it with a Monitor to automatically track episode stats (like terminal_observation)
     monitored_env = Monitor(base_env, str(log_dir), info_keywords=("is_success",))
@@ -57,56 +58,45 @@ if __name__ == '__main__':
     # For DQN, hyperparameters like buffer_size, train_freq, and target_update_interval
     # are passed during initialization, not during .learn()
     policy_kwargs = dict(
-        net_arch=[32, 32, 32],  # Two hidden layers with 32 neurons each
+        net_arch=[64, 64],  # Slightly larger network
     )
     model = LoggingDQN(
         "MlpPolicy",
         env,
         policy_kwargs=policy_kwargs,
-        verbose=2,
-        learning_rate=1e-3,
-        batch_size=40,
-        #replay_buffer_class=PrioritizedReplayBuffer,
-        #replay_buffer_kwargs=dict(top_priority_count=int(episode_length*100/2)),
-        gradient_steps=1000,
-        gamma=0.9999,
-        train_freq=episode_length,  # Update the model every episode
-        target_update_interval=episode_length*10, # Update the target network every 10 episodes
-        buffer_size=episode_length*100, # 100 episodes
-        learning_starts=episode_length, # Number of steps to collect before training starts
+        verbose=1,
+        learning_rate=3e-4, # Standard learning rate for Adam
+        batch_size=64,
+        gradient_steps=1, # Update once per step
+        gamma=0.99, # Standard discount factor
+        train_freq=4,  # Update the model every 4 steps
+        target_update_interval=1000, # Update the target network every 1000 steps
+        buffer_size=100000,
+        learning_starts=1000, 
         # --- Exploration parameters ---
-        # The fraction of total training steps to anneal (decay) exploration rate
-        exploration_fraction=0.2,
-        exploration_initial_eps=0.3, # Start with 100% random actions
-        exploration_final_eps=0.05,  # End with 5% random actions
+        exploration_fraction=0.5, # Longer annealing
+        exploration_initial_eps=1.0, 
+        exploration_final_eps=0.05,
     )
     model.set_logger(new_logger)
 
-    # Set the model in the custom replay buffer after model initialization
-    #model.replay_buffer.model = model
-
     # --- Training ---
-    # Define the number of episodes to train for
     num_episodes_to_train = 5000
-    # Calculate the approximate total timesteps. This is needed for the exploration decay schedule.
     total_timesteps_estimate = num_episodes_to_train * episode_length
 
     # Create the callbacks
     episode_log_callback = EpisodeSummaryCallback()
     episode_logger = EpisodeLogger(logfile=str(log_dir / "episode_steps_log.tsv"))
-    # The StopTrainingOnEpisodeCount callback is no longer needed as we provide a finite total_timesteps.
     callback_list = CallbackList([episode_logger,episode_log_callback])
 
     print(f"Training for {num_episodes_to_train} episodes (approx. {total_timesteps_estimate} timesteps).")
     model.learn(
         total_timesteps=total_timesteps_estimate,
-        log_interval=1,
+        log_interval=10,
         callback=callback_list,
     )
 
     # --- Saving ---
-    # Save the model
     model.save("dqn_crypto_trader")
-    # IMPORTANT: Save the VecNormalize statistics
     env.save("vec_normalize_stats.pkl")
     print("Training complete. Model saved as 'dqn_crypto_trader'.")
