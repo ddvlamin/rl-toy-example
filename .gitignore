@@ -37,3 +37,8 @@ htmlcov/
 logs*/
 
 *.pkl
+
+.ai-dotfiles
+.prompts
+.skills
+.vscode

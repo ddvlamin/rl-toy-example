@@ -1,24 +1,47 @@
 {
-    "name": "CryptoTrader Dev",
+    "name": "cryptotrader",
     "build": {
-        "dockerfile": "../Dockerfile"
+        "dockerfile": "./Dockerfile",
+        "context": ".."
     },
+    "workspaceFolder": "/workspace",
+    "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
     "customizations": {
         "vscode": {
             "extensions": [
                 "ms-python.python",
                 "ms-python.vscode-pylance",
                 "ms-toolsai.jupyter",
-                "google.geminicodeassist",
                 "mechatroner.rainbow-csv",
                 "ms-toolsai.datawrangler",
-                "google.gemini-cli-vscode-ide-companion"
+                "google.gemini-cli-vscode-ide-companion",
+                "tomoki1207.pdf",
+                "davidanson.vscode-markdownlint",
+                "github.vscode-pull-request-github",
+                "mermaidchart.vscode-mermaid-chart",
+                "pomdtr.excalidraw-editor",
+                "hashicorp.terraform",
+                "george-alisson.html-preview-vscode"
             ],
             "settings": {
-                "python.defaultInterpreterPath": ".venv/bin/python"
+                "python.defaultInterpreterPath":"/workspace/.venv/bin/python"
             }
         }
     },
-    //"postCreateCommand": "pip install uv && uv sync --group dev",
+    "features": {
+        "ghcr.io/devcontainers/features/github-cli:1": {},
+        "ghcr.io/devcontainers/features/node:1": {},
+        "ghcr.io/devcontainers/features/docker-in-docker:2": {
+            "moby": false
+        }
+    },
+    "mounts": [
+    ],
+    "remoteEnv": {
+        "DEEPSEEK_API_KEY": "${localEnv:DEEPSEEK_API_KEY}",
+        "CORTECS_API_KEY": "${localEnv:CORTECS_API_KEY}",
+        "GOOGLE_GENERATIVE_AI_API_KEY": "${localEnv:GOOGLE_GENERATIVE_AI_API_KEY}"
+    },
+    "postCreateCommand": "bash .devcontainer/post_setup.sh",
     "forwardPorts": [8888]
 }
