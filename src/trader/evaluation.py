@@ -1,66 +1,75 @@
-import pandas as pd
-import numpy as np
-from pathlib import Path
+"""Evaluation script for a trained DQN cryptocurrency trading agent."""
 
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Any
+
+import numpy as np
 from stable_baselines3 import DQN
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
-from trader.environment import CryptoTraderEnv
-from trader.sinusoid import generate_trending_sinusoid
+from trader.environment import Actions, CryptoTraderEnv
 from trader.signals import subsample_data
-from trader.environment import Actions
+from trader.sinusoid import generate_trending_sinusoid
 
-if __name__ == '__main__':
-    data_path = Path('data/')
-    crypto_file = data_path / 'FORMEUR_1m_1095days.tsv'
+logger = logging.getLogger(__name__)
 
-    # Load the datasets
-    print(f"Loading crypto data from: {crypto_file}")
+
+def main() -> None:
+    """Evaluate a saved DQN policy over one full episode."""
+    logging.basicConfig(level=logging.INFO)
+    data_path = Path("data/")
+    crypto_file = data_path / "FORMEUR_1m_1095days.tsv"
+
+    logger.info("Generating evaluation price data (reference path: %s)", crypto_file)
     crypto_prices_df_1min = generate_trending_sinusoid(num_days=355)
+    crypto_prices_df = subsample_data(crypto_prices_df_1min, freq="D")
 
-    # Subsample the data to an hourly frequency
-    print(f"Original data points: {len(crypto_prices_df_1min)}")
-    crypto_prices_df = subsample_data(crypto_prices_df_1min, freq='D')
-    print(f"Subsampled data points (daily): {len(crypto_prices_df)}")
-
-    feature_window_size = 30
-
-    # Create the base environment
     base_env = CryptoTraderEnv(
-        initial_balance=1000,
-        crypto_prices=crypto_prices_df["close_eur"].values,
-        window_size=feature_window_size
+        initial_balance=1000.0,
+        crypto_prices=crypto_prices_df["close_eur"].to_numpy(),
+        log_ret_window=10,
+        zscore_window=60,
     )
 
-    # 1. Wrap the environment in a DummyVecEnv
     eval_vec_env = DummyVecEnv([lambda: base_env])
-    # 2. Load the saved statistics and wrap the environment with VecNormalize
-    # Use training=False to prevent the running average from being updated
     eval_env = VecNormalize.load("vec_normalize_stats.pkl", eval_vec_env)
     eval_env.training = False
+    eval_env.norm_reward = False
 
-    model = DQN.load("dqn_crypto_trader_2", env=eval_env)
-    
-    obs, info = eval_env.reset()
-    # Run one full episode to evaluate the trained agent
+    model = DQN.load("dqn_crypto_trader", env=eval_env)
+
+    obs = eval_env.reset()
     done = False
+    terminal_info: dict[str, Any] = {}
     while not done:
         action, _ = model.predict(obs, deterministic=True)
-        print(f"Action taken: {"Buy" if action == Actions.Buy else "Sell" if action == Actions.Sell else "Hold"}")
-        obs, reward, terminated, truncated, info = eval_env.step(action)
-        # The observation from a VecEnv is a batch of 1. We need to get the first element.
-        obs_dict ={
-            "norm_balance": float(obs[0][0]),
-            "norm_holdings": float(obs[0][1]),
-            "norm_avg_cost": float(obs[0][2]),
-            "norm_avg_profit": float(obs[0][3]),
-            "norm_price_start": float(obs[0][4]),
-            "norm_price_trend": float(obs[0][5])
-        }
-        print(f"Normalized Observation: {obs_dict}")
-        done = terminated or truncated
-    # Render the environment to see what the agent is doing
-    eval_env.render()
+        action_enum = Actions(int(action[0]))
+        step_obs, _, dones, infos = eval_env.step(action)
+        if not isinstance(step_obs, np.ndarray):
+            raise TypeError("Expected Box ndarray observation from VecNormalize.")
+        obs = step_obs
+        done = bool(dones[0])
+        terminal_info = infos[0]
+        obs_vec = terminal_info.get("terminal_observation", obs[0]) if done else obs[0]
+        obs_dict = dict(
+            zip(base_env.feature_names, (float(val) for val in obs_vec), strict=True)
+        )
+        logger.info("Action: %s | Normalized Obs: %s", action_enum.name, obs_dict)
 
-    print("\n--- Evaluation Finished ---")
+    logger.info(
+        "Evaluation finished | Step: %s | Balance: %.2f | Holdings: %.6f | "
+        "Price: %.2f | Final Portfolio Value: %.2f",
+        terminal_info.get("step"),
+        float(terminal_info.get("balance", 0.0)),
+        float(terminal_info.get("crypto_holdings", 0.0)),
+        float(terminal_info.get("current_price", 0.0)),
+        float(terminal_info.get("portfolio_value", 0.0)),
+    )
     eval_env.close()
+
+
+if __name__ == "__main__":
+    main()

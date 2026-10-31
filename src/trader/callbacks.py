@@ -1,153 +1,185 @@
+"""Custom Stable-Baselines3 callbacks for step and episode logging."""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import TextIO
+
 import numpy as np
 import torch as th
+from stable_baselines3 import DQN
 from stable_baselines3.common.callbacks import BaseCallback
 
+logger = logging.getLogger(__name__)
+
+
 class EpisodeLogger(BaseCallback):
-    """
-    A custom callback that logs information for each step
-    """
-    def __init__(self, logfile, verbose: int = 0):
-        super(EpisodeLogger, self).__init__(verbose)
-        self.logfile = open(logfile, 'w')
-        # write header
-        self.logfile.write("episode\tstep\taction\treward\t" +
-                        "policy_q\ttarget_q\t" +
-                        "orig_log_return\torig_balance_ratio\torig_holdings_ratio\t" +
-                        "orig_price_trend\torig_profit_ratio\torig_price_diff_last_action\torig_portfolio_ratio\t" + 
-                        "obs_log_return\tobs_balance_ratio\tobs_holdings_ratio\t" +
-                        "obs_price_trend\tobs_profit_ratio\tobs_price_diff_last_action\tobs_portfolio_ratio\n")
-        self.episode_length = None
+    """Callback that logs step-level rewards, Q-values, and observations to TSV."""
+
+    def __init__(self, logfile: str | Path, verbose: int = 0) -> None:
+        """Initialize the step logger callback.
+
+        Args:
+            logfile: Destination path for the tab-separated step log.
+            verbose: Verbosity level.
+        """
+        super().__init__(verbose)
+        self.logfile_path: Path = Path(logfile)
+        self.logfile: TextIO | None = None
+        self.episode_length: int = 1
 
     def _on_training_start(self) -> None:
-        # Cache static environment attributes once at the start to improve performance
-        prices_len = self.training_env.get_attr('crypto_prices')[0].shape[0]
-        window_size = self.training_env.get_attr('window_size')[0]
-        self.episode_length = prices_len - window_size - 1
+        """Open logfile lazily, cache episode length, and write feature header."""
+        self.episode_length = int(self.training_env.get_attr("episode_length")[0])
+        feature_names: list[str] = self.training_env.get_attr("feature_names")[0]
+        if self.logfile is None or self.logfile.closed:
+            self.logfile_path.parent.mkdir(parents=True, exist_ok=True)
+            self.logfile = self.logfile_path.open("w", encoding="utf-8")
+            orig_cols = "\t".join(f"orig_{name}" for name in feature_names)
+            obs_cols = "\t".join(f"obs_{name}" for name in feature_names)
+            self.logfile.write(
+                "episode\tstep\taction\treward\tpolicy_q\ttarget_q\t"
+                f"{orig_cols}\t{obs_cols}\n"
+            )
 
     def _on_step(self) -> bool:
-        #get the action taken
-        action = self.locals['actions'][0]
-        reward = self.locals['rewards'][0]
+        """Record transition metrics and observations at each environment step."""
+        if self.logfile is None or self.logfile.closed:
+            raise RuntimeError(
+                "EpisodeLogger logfile is not open; ensure _on_training_start ran."
+            )
 
-        done = self.locals['dones'][0]
+        action = int(self.locals["actions"][0])
+        reward = float(self.locals["rewards"][0])
+        done = bool(self.locals["dones"][0])
+
         if done:
-            info = self.locals['infos'][0]
-            terminal_obs = info.get('terminal_observation')
-            
-            observation = terminal_obs
-            if hasattr(self.training_env, 'unnormalize_obs'):
+            info = self.locals["infos"][0]
+            terminal_obs = info.get("terminal_observation")
+            if terminal_obs is None:
+                raise RuntimeError(
+                    "Missing terminal_observation in terminal step info."
+                )
+            observation: np.ndarray = terminal_obs
+            if hasattr(self.training_env, "unnormalize_obs"):
                 original_observation = self.training_env.unnormalize_obs(terminal_obs)
             else:
                 original_observation = terminal_obs
-            
-            step = self.training_env.get_attr('crypto_prices')[0].shape[0] - 1
+            step = int(
+                info.get(
+                    "step",
+                    self.training_env.get_attr("crypto_prices")[0].shape[0] - 1,
+                )
+            )
             episode = (self.num_timesteps - 1) // self.episode_length
         else:
-            observation = self.locals['new_obs'][0]
-            original_observation = self.training_env.get_original_obs()[0]
-            step = self.training_env.get_attr('current_step')[0]
+            observation = self.locals["new_obs"][0]
+            original_observation = self.training_env.env_method("get_original_obs")[0]
+            step = int(self.training_env.get_attr("current_step")[0])
             episode = self.num_timesteps // self.episode_length
 
-        # Get the episode rewards from the Monitor wrapper
-        episode_rewards = self.training_env.env_method('get_episode_rewards')
-        #print(episode_rewards)
-        if episode_rewards:
-            # The result is a list of deques, one for each env. We have one env.
-            rewards_deque = episode_rewards[0]
-            if rewards_deque:
-                ep_rew_mean = np.mean(rewards_deque)
-                #print(f"Mean reward over last {len(rewards_deque)} episodes: {ep_rew_mean:.2f}")        
+        policy_q, target_q = self._compute_q_values(action)
 
-        # Calculate Q-values
-        obs = self.model._last_obs
-        obs_tensor, _ = self.model.policy.obs_to_tensor(obs)
+        orig_str = "\t".join(f"{float(x):.6f}" for x in original_observation)
+        obs_str = "\t".join(f"{float(x):.6f}" for x in observation)
+        self.logfile.write(
+            f"{episode}\t{step}\t{action}\t{reward}\t"
+            f"{policy_q:.6f}\t{target_q:.6f}\t{orig_str}\t{obs_str}\n"
+        )
+        return True
+
+    def _compute_q_values(self, action: int) -> tuple[float, float]:
+        """Compute policy and target Q-values for the selected action."""
+        if not isinstance(self.model, DQN) or self.model._last_obs is None:
+            return 0.0, 0.0
+        obs_tensor, _ = self.model.policy.obs_to_tensor(self.model._last_obs)
         with th.no_grad():
             q_values = self.model.q_net(obs_tensor)
             q_values_target = self.model.q_net_target(obs_tensor)
-        
-        policy_q = q_values[0, int(action)].item()
-        target_q = q_values_target[0, int(action)].item()
-
-        #write to logfile as tsv
-        self.logfile.write(f"{episode}\t{step}\t{action}\t{reward}\t" +
-                           f"{policy_q:.6f}\t{target_q:.6f}\t" +
-                           "\t".join([f"{x:.6f}" for x in original_observation]) + "\t" +
-                           "\t".join([f"{x:.6f}" for x in observation]) + "\n")
-
-        return True # Continue training
+        return float(q_values[0, action].item()), float(
+            q_values_target[0, action].item()
+        )
 
     def _on_training_end(self) -> None:
-        print("training ended, closing logfile")
-        self.logfile.close()
+        """Close the TSV logfile when training completes."""
+        self.close()
 
-    def close(self):
-        self.logfile.close()
-
+    def close(self) -> None:
+        """Flush and close the underlying logfile if still open."""
+        if self.logfile is not None and not self.logfile.closed:
+            self.logfile.close()
 
 
 class EpisodeSummaryCallback(BaseCallback):
-    """
-    A custom callback that logs information at the end of each episode.
-    """
-    def __init__(self, verbose: int = 0):
-        super(EpisodeSummaryCallback, self).__init__(verbose)
+    """Callback that logs portfolio summary metrics at the end of each episode."""
+
+    def __init__(self, verbose: int = 0) -> None:
+        """Initialize the episode summary callback.
+
+        Args:
+            verbose: Verbosity level.
+        """
+        super().__init__(verbose)
 
     def _on_step(self) -> bool:
-        """
-        This method will be called by the model after each call to `env.step()`.
-        """
-        # Check if the episode is done (dones is a list for vectorized envs)
-        if self.locals['dones'][0]:
-            info = self.locals['infos'][0]
-            episode = info.get('episode')
-            
-            # Get values directly from the environment
-            initial_balance = self.training_env.get_attr('initial_balance')[0]
-            balance = self.training_env.get_attr('balance')[0]
-            crypto_holdings = self.training_env.get_attr('crypto_holdings')[0]
-            current_step = self.training_env.get_attr('current_step')[0]
-            crypto_prices = self.training_env.get_attr('crypto_prices')[0]
-            current_price = crypto_prices[current_step]
-            avg_cost = self.training_env.get_attr('avg_cost_of_holdings')[0]
-            
-            final_asset_value = balance + crypto_holdings * current_price
+        """Log terminal summary statistics preserved in step info before auto-reset."""
+        if self.locals["dones"][0]:
+            info = self.locals["infos"][0]
+            episode = info.get("episode")
+            initial_balance = float(self.training_env.get_attr("initial_balance")[0])
 
-            print(f"\n--- Episode End Summary (Timestep: {self.num_timesteps}) ---")
-            print(f"Lasted {episode['l']} timesteps")
-            print(f"Collected rewards: {episode['r']}")
-            print(f"Initial balance: {initial_balance:.2f}")
-            print(f"Last asset value: {final_asset_value:.2f}")
-            print(f"Profit/Loss: {final_asset_value - initial_balance:.2f}")
-            print(f"Last Balance: {balance:.2f}")
-            print(f"Last Holdings: {crypto_holdings:.6f}")
-            print(f"Last Price: {current_price:.2f}")
-            print(f"Last Avg Cost: {avg_cost:.2f}")
+            final_asset_value = float(info.get("portfolio_value", initial_balance))
+            balance = float(info.get("balance", initial_balance))
+            crypto_holdings = float(info.get("crypto_holdings", 0.0))
+            current_price = float(info.get("current_price", 0.0))
+            raw_entry = info.get("entry_price")
+            entry_price = 0.0 if raw_entry is None else float(raw_entry)
 
-        return True # Continue training
+            if self.verbose > 0 and episode is not None:
+                logger.info(
+                    "Episode End (t=%d) | len=%s | rew=%s | value=%.2f | PnL=%.2f | "
+                    "balance=%.2f | holdings=%.6f | price=%.2f | entry_price=%.2f",
+                    self.num_timesteps,
+                    episode["l"],
+                    episode["r"],
+                    final_asset_value,
+                    final_asset_value - initial_balance,
+                    balance,
+                    crypto_holdings,
+                    current_price,
+                    entry_price,
+                )
+        return True
+
 
 class StopTrainingOnEpisodeCount(BaseCallback):
-    """
-    Stops the training once a certain number of episodes have been completed.
+    """Callback that stops training once a target episode count is reached."""
 
-    This is useful when episodes can have variable lengths.
+    def __init__(self, max_episodes: int, verbose: int = 1) -> None:
+        """Initialize the episode-count stopping criterion.
 
-    :param max_episodes: The number of episodes to train for.
-    :param verbose: Verbosity level.
-    """
-    def __init__(self, max_episodes: int, verbose: int = 1):
-        super(StopTrainingOnEpisodeCount, self).__init__(verbose)
-        self.max_episodes = max_episodes
-        self.episode_count = 0
+        Args:
+            max_episodes: Maximum number of completed episodes before stopping.
+            verbose: Verbosity level.
+        """
+        super().__init__(verbose)
+        self.max_episodes: int = max_episodes
+        self.episode_count: int = 0
 
     def _on_step(self) -> bool:
-        # self.locals['dones'] is a boolean array, True for each env that is done.
-        # In our case, we have a single environment, so we check dones[0].
-        if self.locals['dones'][0]:
+        """Increment episode counter on termination and stop when limit reached."""
+        if self.locals["dones"][0]:
             self.episode_count += 1
             if self.verbose > 0:
-                print(f"Episode {self.episode_count}/{self.max_episodes} finished.")
+                logger.info(
+                    "Episode %d/%d finished.", self.episode_count, self.max_episodes
+                )
 
         if self.episode_count >= self.max_episodes:
-            print(f"Stopping training: reached {self.episode_count} episodes.")
-            return False  # Return False to stop training
+            if self.verbose > 0:
+                logger.info(
+                    "Stopping training: reached %d episodes.", self.episode_count
+                )
+            return False
         return True
