@@ -13,7 +13,8 @@ dependencies = [
     "torch>=2,<3",
     "stable-baselines3>=2,<3",
     "python-binance>=1,<2",
-    "pandas>=2,<3"
+    "pandas>=2,<3",
+    "sb3-contrib>=2.9.2",
 ]
 
 [dependency-groups]

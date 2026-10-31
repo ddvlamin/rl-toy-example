@@ -50,10 +50,13 @@ class CryptoTraderEnv(gym.Env[np.ndarray, int]):
         crypto_prices: Sequence[float] | np.ndarray | None = None,
         transaction_fee_percent: float = 0.01,
         log_ret_window: int = 10,
-        invalid_action_penalty: float = 0.1,
         *,
         zscore_window: int = 60,
         max_holding_steps: int | None = None,
+        target_profit: float = 0.0,
+        below_target_penalty: float = 0.0,
+        holding_penalty: float = 0.0001,
+        buy_above_last_sell_penalty: float = 0.01,
     ) -> None:
         """Initialize the trading environment and precompute price signal features.
 
@@ -62,11 +65,18 @@ class CryptoTraderEnv(gym.Env[np.ndarray, int]):
             crypto_prices: 1D sequence of strictly positive asset prices.
             transaction_fee_percent: Proportional fee per trade in ``[0, 1)``.
             log_ret_window: Lookback horizon ``k`` for rolling normalized log returns.
-            invalid_action_penalty: Non-negative reward penalty for illegal trades.
             zscore_window: Trailing estimation window ``W`` (``W >= k``) for
                 log-return Z-score standardization.
             max_holding_steps: Normalization horizon ``T_max`` for
                 ``holding_steps_norm``. Defaults to ``episode_length``.
+            target_profit: Net realized return threshold below which
+                ``below_target_penalty`` is subtracted on trade exit.
+            below_target_penalty: Non-negative penalty subtracted from exit reward
+                when realized net return falls below ``target_profit``.
+            holding_penalty: Non-negative step cost subtracted while holding an
+                open position (``position == 1``).
+            buy_above_last_sell_penalty: Non-negative shaping penalty subtracted
+                when buying at ``P_t > P_last_sell``.
         """
         super().__init__()
 
@@ -75,8 +85,11 @@ class CryptoTraderEnv(gym.Env[np.ndarray, int]):
         self._validate_config(
             initial_balance=initial_balance,
             transaction_fee_percent=transaction_fee_percent,
-            invalid_action_penalty=invalid_action_penalty,
             max_holding_steps=max_holding_steps,
+            target_profit=target_profit,
+            below_target_penalty=below_target_penalty,
+            holding_penalty=holding_penalty,
+            buy_above_last_sell_penalty=buy_above_last_sell_penalty,
         )
 
         raw_features, price_feature_names, start_step = (
@@ -98,7 +111,10 @@ class CryptoTraderEnv(gym.Env[np.ndarray, int]):
         self.transaction_fee_percent: float = float(transaction_fee_percent)
         self.log_ret_window: int = log_ret_window
         self.zscore_window: int = zscore_window
-        self.invalid_action_penalty: float = float(invalid_action_penalty)
+        self.target_profit: float = float(target_profit)
+        self.below_target_penalty: float = float(below_target_penalty)
+        self.holding_penalty: float = float(holding_penalty)
+        self.buy_above_last_sell_penalty: float = float(buy_above_last_sell_penalty)
 
         self.start_step: int = start_step
         self.episode_length: int = int(prices_arr.shape[0] - start_step - 1)
@@ -125,7 +141,6 @@ class CryptoTraderEnv(gym.Env[np.ndarray, int]):
         self.balance: float = self.initial_balance
         self.crypto_holdings: float = 0.0
         self.current_step: int = self.start_step
-        self.last_portfolio_value: float = self.initial_balance
         self.entry_price: float | None = None
         self.entry_step: int | None = None
         self.last_sell_price: float | None = None
@@ -134,25 +149,56 @@ class CryptoTraderEnv(gym.Env[np.ndarray, int]):
     def _validate_config(
         initial_balance: float,
         transaction_fee_percent: float,
-        invalid_action_penalty: float,
         max_holding_steps: int | None,
+        target_profit: float,
+        below_target_penalty: float,
+        holding_penalty: float,
+        buy_above_last_sell_penalty: float,
     ) -> None:
-        """Validate environment financial and duration parameters."""
-        if initial_balance <= 0.0:
-            raise ValueError(f"initial_balance must be > 0, got {initial_balance}.")
+        """Validate environment financial, duration, and reward parameters."""
+        if initial_balance <= 0.0 or not math.isfinite(initial_balance):
+            raise ValueError(
+                f"initial_balance must be finite and > 0, got {initial_balance}."
+            )
         if not 0.0 <= transaction_fee_percent < 1.0:
             raise ValueError(
                 "transaction_fee_percent must be in [0, 1), "
                 f"got {transaction_fee_percent}."
             )
-        if invalid_action_penalty < 0.0:
-            raise ValueError(
-                f"invalid_action_penalty must be >= 0, got {invalid_action_penalty}."
-            )
         if max_holding_steps is not None and max_holding_steps < 1:
             raise ValueError(
                 f"max_holding_steps must be >= 1, got {max_holding_steps}."
             )
+        if not math.isfinite(target_profit):
+            raise ValueError(f"target_profit must be finite, got {target_profit}.")
+        if below_target_penalty < 0.0 or not math.isfinite(below_target_penalty):
+            raise ValueError(
+                "below_target_penalty must be finite and >= 0, "
+                f"got {below_target_penalty}."
+            )
+        if holding_penalty < 0.0 or not math.isfinite(holding_penalty):
+            raise ValueError(
+                f"holding_penalty must be finite and >= 0, got {holding_penalty}."
+            )
+        if buy_above_last_sell_penalty < 0.0 or not math.isfinite(
+            buy_above_last_sell_penalty
+        ):
+            raise ValueError(
+                "buy_above_last_sell_penalty must be finite and >= 0, "
+                f"got {buy_above_last_sell_penalty}."
+            )
+
+    def action_masks(self) -> np.ndarray:
+        """Return boolean mask of valid discrete actions ``[Hold, Buy, Sell]``.
+
+        Returns:
+            Boolean ``ndarray`` of shape ``(3,)`` indicating legal actions for
+            ``sb3_contrib.MaskablePPO``.
+        """
+        return np.array(
+            [True, self.balance > 0.0, self.crypto_holdings > 0.0],
+            dtype=bool,
+        )
 
     def reset(
         self,
@@ -172,7 +218,6 @@ class CryptoTraderEnv(gym.Env[np.ndarray, int]):
         self.balance = self.initial_balance
         self.crypto_holdings = 0.0
         self.current_step = self.start_step
-        self.last_portfolio_value = self.initial_balance
         self.entry_price = None
         self.entry_step = None
         self.last_sell_price = None
@@ -194,16 +239,18 @@ class CryptoTraderEnv(gym.Env[np.ndarray, int]):
                 "Cannot call step() on a terminated episode; call reset() first."
             )
 
-        penalty = self._execute_trade(action)
+        reward = self._execute_trade(action)
 
         self.current_step += 1
         terminated = bool(self.current_step >= self.crypto_prices.shape[0] - 1)
-
         current_price = float(self.crypto_prices[self.current_step])
-        current_portfolio_value = self._get_assets_value()
-        reward = math.log(current_portfolio_value / self.last_portfolio_value) + penalty
-        self.last_portfolio_value = current_portfolio_value
 
+        if self.crypto_holdings > 0.0:
+            reward -= self.holding_penalty
+            if terminated and self.entry_price is not None:
+                reward += self._compute_exit_reward(current_price, self.entry_price)
+
+        current_portfolio_value = self._get_assets_value()
         obs = self._get_observation()
         info: dict[str, Any] = {
             "is_success": bool(current_portfolio_value > self.initial_balance),
@@ -216,8 +263,18 @@ class CryptoTraderEnv(gym.Env[np.ndarray, int]):
         }
         return obs, float(reward), terminated, False, info
 
+    def _compute_exit_reward(self, exit_price: float, entry_price: float) -> float:
+        """Compute realized round-trip return after fees and target-profit penalty."""
+        fee = self.transaction_fee_percent
+        net_return = (
+            exit_price * (1.0 - fee) - entry_price * (1.0 + fee)
+        ) / entry_price
+        if net_return < self.target_profit:
+            return net_return - self.below_target_penalty
+        return net_return
+
     def _execute_trade(self, action: int | np.integer) -> float:
-        """Execute Buy/Sell/Hold order with action safety checks."""
+        """Execute Buy/Sell/Hold order and return immediate trade reward/shaping."""
         try:
             parsed_action = Actions(int(action))
         except ValueError as exc:
@@ -227,17 +284,26 @@ class CryptoTraderEnv(gym.Env[np.ndarray, int]):
 
         if parsed_action == Actions.Buy:
             if self.balance > 0.0:
+                shaping = (
+                    -self.buy_above_last_sell_penalty
+                    if (
+                        self.last_sell_price is not None
+                        and current_price > self.last_sell_price
+                    )
+                    else 0.0
+                )
                 fee = self.transaction_fee_percent * self.balance
                 buy_amount = self.balance - fee
                 self.crypto_holdings += buy_amount / current_price
                 self.balance = 0.0
                 self.entry_price = current_price
                 self.entry_step = self.current_step
-                return 0.0
-            return -self.invalid_action_penalty
+                return shaping
+            return 0.0
 
         if parsed_action == Actions.Sell:
-            if self.crypto_holdings > 0.0:
+            if self.crypto_holdings > 0.0 and self.entry_price is not None:
+                exit_reward = self._compute_exit_reward(current_price, self.entry_price)
                 sell_amount = self.crypto_holdings * current_price
                 fee = self.transaction_fee_percent * sell_amount
                 self.balance += sell_amount - fee
@@ -245,8 +311,8 @@ class CryptoTraderEnv(gym.Env[np.ndarray, int]):
                 self.entry_price = None
                 self.entry_step = None
                 self.last_sell_price = current_price
-                return 0.0
-            return -self.invalid_action_penalty
+                return exit_reward
+            return 0.0
 
         return 0.0
 

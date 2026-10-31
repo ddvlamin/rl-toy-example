@@ -90,16 +90,19 @@ class EpisodeLogger(BaseCallback):
         return True
 
     def _compute_q_values(self, action: int) -> tuple[float, float]:
-        """Compute policy and target Q-values for the selected action."""
-        if not isinstance(self.model, DQN) or self.model._last_obs is None:
-            return 0.0, 0.0
-        obs_tensor, _ = self.model.policy.obs_to_tensor(self.model._last_obs)
-        with th.no_grad():
-            q_values = self.model.q_net(obs_tensor)
-            q_values_target = self.model.q_net_target(obs_tensor)
-        return float(q_values[0, action].item()), float(
-            q_values_target[0, action].item()
-        )
+        """Compute policy/target Q-values (DQN) or critic state value (Actor-Critic)."""
+        if isinstance(self.model, DQN) and self.model._last_obs is not None:
+            obs_tensor, _ = self.model.policy.obs_to_tensor(self.model._last_obs)
+            with th.no_grad():
+                q_values = self.model.q_net(obs_tensor)
+                q_values_target = self.model.q_net_target(obs_tensor)
+            return float(q_values[0, action].item()), float(
+                q_values_target[0, action].item()
+            )
+        values = self.locals.get("values")
+        if isinstance(values, th.Tensor):
+            return float(values.flatten()[0].item()), 0.0
+        return 0.0, 0.0
 
     def _on_training_end(self) -> None:
         """Close the TSV logfile when training completes."""

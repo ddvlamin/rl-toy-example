@@ -1,4 +1,4 @@
-"""Training entrypoint for the DQN cryptocurrency trading agent."""
+"""Training entrypoint for the MaskablePPO cryptocurrency trading agent."""
 
 from __future__ import annotations
 
@@ -7,13 +7,13 @@ import os
 from pathlib import Path
 
 import numpy as np
+from sb3_contrib import MaskablePPO
 from stable_baselines3.common.callbacks import CallbackList
 from stable_baselines3.common.logger import configure
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from trader.callbacks import EpisodeLogger, EpisodeSummaryCallback
-from trader.custom_dqn import LoggingDQN
 from trader.environment import CryptoTraderEnv
 from trader.signals import subsample_data
 from trader.sinusoid import generate_trending_sinusoid
@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    """Train LoggingDQN on stationary price features and save artifacts."""
+    """Train MaskablePPO on stationary price features and save artifacts."""
     logging.basicConfig(level=logging.INFO)
     data_path = Path("data/")
     crypto_file = data_path / "FORMEUR_1m_1095days.tsv"
@@ -43,7 +43,6 @@ def main() -> None:
         crypto_prices=crypto_prices_df["close_eur"].to_numpy(),
         log_ret_window=10,
         zscore_window=60,
-        invalid_action_penalty=0.01,
     )
     episode_length = base_env.episode_length
 
@@ -54,26 +53,22 @@ def main() -> None:
     env = VecNormalize(vec_env, norm_obs=True, norm_reward=False)
 
     policy_kwargs = {"net_arch": [64, 64]}
-    model = LoggingDQN(
+    model = MaskablePPO(
         "MlpPolicy",
         env,
         policy_kwargs=policy_kwargs,
         verbose=1,
         learning_rate=3e-4,
+        n_steps=1024,
         batch_size=64,
-        gradient_steps=1,
+        n_epochs=10,
         gamma=0.99,
-        train_freq=4,
-        target_update_interval=1000,
-        buffer_size=100000,
-        learning_starts=1000,
-        exploration_fraction=0.5,
-        exploration_initial_eps=1.0,
-        exploration_final_eps=0.05,
+        gae_lambda=0.95,
+        ent_coef=0.01,
     )
     model.set_logger(sb3_logger)
 
-    num_episodes_to_train = 5000
+    num_episodes_to_train = 500
     total_timesteps_estimate = num_episodes_to_train * episode_length
 
     episode_log_callback = EpisodeSummaryCallback(verbose=1)
@@ -87,13 +82,13 @@ def main() -> None:
     )
     model.learn(
         total_timesteps=total_timesteps_estimate,
-        log_interval=10,
+        log_interval=1,
         callback=callback_list,
     )
 
-    model.save("dqn_crypto_trader")
+    model.save("maskable_ppo_crypto_trader")
     env.save("vec_normalize_stats.pkl")
-    logger.info("Training complete. Model saved as 'dqn_crypto_trader'.")
+    logger.info("Training complete. Model saved as 'maskable_ppo_crypto_trader'.")
 
 
 if __name__ == "__main__":

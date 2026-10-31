@@ -1,4 +1,4 @@
-"""Evaluation script for a trained DQN cryptocurrency trading agent."""
+"""Evaluation script for a trained MaskablePPO cryptocurrency trading agent."""
 
 from __future__ import annotations
 
@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from stable_baselines3 import DQN
+from sb3_contrib import MaskablePPO
+from sb3_contrib.common.maskable.utils import get_action_masks
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from trader.environment import Actions, CryptoTraderEnv
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def main() -> None:
-    """Evaluate a saved DQN policy over one full episode."""
+    """Evaluate a saved MaskablePPO policy over one full episode."""
     logging.basicConfig(level=logging.INFO)
     data_path = Path("data/")
     crypto_file = data_path / "FORMEUR_1m_1095days.tsv"
@@ -39,13 +40,14 @@ def main() -> None:
     eval_env.training = False
     eval_env.norm_reward = False
 
-    model = DQN.load("dqn_crypto_trader", env=eval_env)
+    model = MaskablePPO.load("maskable_ppo_crypto_trader", env=eval_env)
 
     obs = eval_env.reset()
     done = False
     terminal_info: dict[str, Any] = {}
     while not done:
-        action, _ = model.predict(obs, deterministic=True)
+        masks = get_action_masks(eval_env)
+        action, _ = model.predict(obs, deterministic=True, action_masks=masks)
         action_enum = Actions(int(action[0]))
         step_obs, _, dones, infos = eval_env.step(action)
         if not isinstance(step_obs, np.ndarray):
